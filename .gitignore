@@ -1,2 +1,3 @@
-src/main/resources/application.conf
 .idea/
+project/
+target/

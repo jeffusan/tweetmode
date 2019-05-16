@@ -1,5 +1,4 @@
 
-import config.AppConfig
 import org.apache.log4j.{Level, LogManager, Logger}
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.ReceiverInputDStream
@@ -9,6 +8,12 @@ import pureconfig.generic.auto._
 import twitter4j.{FilterQuery, Status}
 
 object tweetmode {
+
+  case class AppConfig(
+                        consumerKey: String,
+                        consumerSecret: String,
+                        accessToken: String,
+                        accessTokenSecret: String)
 
   case class TweetCreds(consumerKey: String, consumerSecret: String, accessToken: String, accessTokenSecret: String)
 
@@ -44,17 +49,19 @@ object tweetmode {
     ssc.awaitTermination()
   }
 
-  def processStream(stream: ReceiverInputDStream[Status]) = {
-    val hashTags = stream.flatMap(status => status.getText.split(" ").filter(_.startsWith("#")))
-
-    val topCounts60 = hashTags.map((_, 1)).reduceByKeyAndWindow(_ + _, Seconds(60))
-      .map{case (topic, count) => (count, topic)}
-      .transform(_.sortByKey(false))
-
-    val topCounts10 = hashTags.map((_, 1)).reduceByKeyAndWindow(_ + _, Seconds(10))
-      .map{case (topic, count) => (count, topic)}
-      .transform(_.sortByKey(false))
-
+  def processStream(stream: ReceiverInputDStream[Status]) = stream.flatMap { status =>
+      status.getText.split(" ").filter(_.startsWith("#"))
+    }
+    .map((_, 1))
+    .reduceByKeyAndWindow(_ + _, Seconds(10))
+    .map{case (topic,count) => (count, topic)}
+    .transform(_.sortByKey(false))
+    .foreachRDD { rdd =>
+      val topList = rdd.take(10)
+      println("\nPopular topics in last 10 seconds (%s total):".format(rdd.count()))
+      topList.foreach{case (count, tag) => println("%s (%s tweets)".format(tag, count))}
+    }
+  /**
 
     // Print popular hashtags
     topCounts60.foreachRDD(rdd => {
@@ -65,9 +72,8 @@ object tweetmode {
 
     topCounts10.foreachRDD(rdd => {
       val topList = rdd.take(10)
-      println("\nPopular topics in last 10 seconds (%s total):".format(rdd.count()))
-      topList.foreach{case (count, tag) => println("%s (%s tweets)".format(tag, count))}
     })
   }
-
+    */
+  
 }
