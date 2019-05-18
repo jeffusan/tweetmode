@@ -6,6 +6,7 @@ import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.twitter.TwitterUtils
 import pureconfig.generic.auto._
 import twitter4j.{FilterQuery, Status}
+import cats.data.State
 
 object tweetmode {
 
@@ -13,21 +14,42 @@ object tweetmode {
                         consumerKey: String,
                         consumerSecret: String,
                         accessToken: String,
-                        accessTokenSecret: String)
+                        accessTokenSecret: String,
+                        appName: String,
+                        sparkMaster: String,
+                        streamMicrobatchSeconds: Int)
 
-  case class TweetCreds(consumerKey: String, consumerSecret: String, accessToken: String, accessTokenSecret: String)
+  case class TweetModeState(tweets: Seq[Tweet], batchRate: Int, batchCount: Int = 1) {
 
-  def streamingContext: StreamingContext = {
+    def tweetCount: Int = tweets.size
 
-    val sparkConf = new SparkConf().setAppName("TwitterPopularTags")
-    if (!sparkConf.contains("spark.master")) {
-      sparkConf.setMaster("local[*]")
+    override def toString: String = {
+      s"""
+        |tweetcount: $tweetCount,
+        |seconds: ${batchRate * batchCount}
+      """.stripMargin
     }
-    new StreamingContext(sparkConf, Seconds(2))
   }
 
-  def streamFromEnv(ssc: StreamingContext): ReceiverInputDStream[Status] = {
-    val config = pureconfig.loadConfigOrThrow[AppConfig]("tweetmode")
+  case class Emoji(character: String)
+
+  case class HashTag(value: String)
+
+  case class Domain(value: String)
+
+  case class Tweet(value: String)
+
+
+  def streamingContext(config: AppConfig): StreamingContext = {
+
+    val sparkConf = new SparkConf().setAppName(config.appName)
+    if (!sparkConf.contains("spark.master")) {
+      sparkConf.setMaster(config.sparkMaster)
+    }
+    new StreamingContext(sparkConf, Seconds(config.streamMicrobatchSeconds))
+  }
+
+  def streamFromEnv(ssc: StreamingContext, config: AppConfig): ReceiverInputDStream[Status] = {
 
     System.setProperty("twitter4j.oauth.consumerKey", config.consumerKey)
     System.setProperty("twitter4j.oauth.consumerSecret", config.consumerSecret)
@@ -38,42 +60,30 @@ object tweetmode {
 
   def main(args: Array[String]): Unit = {
 
+    val config = pureconfig.loadConfigOrThrow[AppConfig]("tweetmode")
+
     LogManager.getRootLogger.setLevel(Level.WARN)
 
-    val ssc = streamingContext
-    val stream = streamFromEnv(ssc)
+    val ssc = streamingContext(config)
+    ssc.checkpoint("./checkpoint")
+    val stream = streamFromEnv(ssc, config)
 
-    processStream(stream)
+    processStream(stream, config)
 
     ssc.start()
     ssc.awaitTermination()
   }
 
-  def processStream(stream: ReceiverInputDStream[Status]) = stream.flatMap { status =>
-      status.getText.split(" ").filter(_.startsWith("#"))
-    }
-    .map((_, 1))
-    .reduceByKeyAndWindow(_ + _, Seconds(10))
-    .map{case (topic,count) => (count, topic)}
-    .transform(_.sortByKey(false))
-    .foreachRDD { rdd =>
-      val topList = rdd.take(10)
-      println("\nPopular topics in last 10 seconds (%s total):".format(rdd.count()))
-      topList.foreach{case (count, tag) => println("%s (%s tweets)".format(tag, count))}
-    }
-  /**
-
-    // Print popular hashtags
-    topCounts60.foreachRDD(rdd => {
-      val topList = rdd.take(10)
-      println("\nPopular topics in last 60 seconds (%s total):".format(rdd.count()))
-      topList.foreach{case (count, tag) => println("%s (%s tweets)".format(tag, count))}
-    })
-
-    topCounts10.foreachRDD(rdd => {
-      val topList = rdd.take(10)
-    })
+  def processStream(stream: ReceiverInputDStream[Status], config: AppConfig) = {
+    implicit val c = config
+    stream.map(s => Tweet(s.getText))
+      .map(t => (TweetModeState(Seq.empty, config.streamMicrobatchSeconds), t))
+      .updateStateByKey(updateFunction)
+      .foreachRDD(rdd => println(rdd.take(1).head._2))
   }
-    */
-  
+
+  def updateFunction(tweets: Seq[Tweet], state: Option[TweetModeState])(implicit config: AppConfig): Option[TweetModeState] = state match {
+    case None => Some(TweetModeState(tweets, config.streamMicrobatchSeconds))
+    case Some(s) => Some(s.copy(tweets = s.tweets ++ tweets, batchCount = s.batchCount + 1))
+  }
 }
