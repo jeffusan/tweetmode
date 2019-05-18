@@ -21,22 +21,28 @@ object algebras {
 
     def tweetsPerHour: Int = tweetsPerMinute * 60
 
-    def domainCount: Int = tweets.flatMap(t => t.domains).size
+    def domainCount: Int = tweets.flatMap(_.domains).size
 
-    def hashTagCount: Int = tweets.count(_.hasHashTag)
+    def hashTagCount: Int = tweets.flatMap(_.hashTags).size
 
-    def emojiCount: Int = tweets.count(_.hasEmoji)
+    def emojiCount: Int = tweets.flatMap(_.emojis).size
 
-    def mediaCount: Int = tweets.count(_.hasMedia)
+    def mediaCount: Int = tweets.flatMap(_.media).size
 
-    override def toString: String = {
+    private def round(v: Double): Double = BigDecimal(v).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
+
+    private def percentOfTweets(p: Int): Double = round((p * 100.0f) / tweetCount)
+
+    override def toString: String =
       s"""
          |tweetcount: $tweetCount,
          |tweets per second: $tweetsPerSecond
          |tweets per minute: $tweetsPerMinute
          |tweets per hour: $tweetsPerHour
+         |percentage domains: ${percentOfTweets(domainCount)}
+         |percentage emojis: ${percentOfTweets(emojiCount)}
+         |percentage hashtag: ${percentOfTweets(hashTagCount)}
       """.stripMargin
-    }
   }
 
   case class Emoji(character: String)
@@ -49,10 +55,10 @@ object algebras {
 
     def domains: Seq[Domain] = value.getURLEntities.map(e => Domain(e.getExpandedURL))
 
-    def hasHashTag: Boolean = value.getHashtagEntities.length > 0
+    def hashTags: Seq[HashTag] = value.getHashtagEntities.map(h => HashTag(h.getText))
 
-    def hasMedia: Boolean = value.getMediaEntities.length > 0
+    def media: Seq[String] = value.getMediaEntities.map(m => m.getExpandedURL)
 
-    def hasEmoji: Boolean = value.getSymbolEntities.length > 0
+    def emojis: Seq[Emoji] = value.getSymbolEntities.map(s => Emoji(s.getText))
   }
 }

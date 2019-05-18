@@ -38,6 +38,7 @@ object functions {
       .map(t => (TweetModeState(Seq.empty, config.streamMicrobatchSeconds), t))
       .updateStateByKey(updateFunction)
       .foreachRDD(rdd => println(rdd.take(1).head._2))
+
   }
 
   def updateFunction(tweets: Seq[Tweet], state: Option[TweetModeState])(implicit config: AppConfig): Option[TweetModeState] = state match {
